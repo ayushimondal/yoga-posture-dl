@@ -1,13 +1,14 @@
 import streamlit as st
+import av
 import cv2
 import mediapipe as mp
 import numpy as np
 import tensorflow as tf
 import math
 import time
-import av
 import queue
 from streamlit_webrtc import webrtc_streamer, WebRtcMode, RTCConfiguration
+
 st.set_page_config(
     page_title="YogaVision",
     page_icon="🧘",
@@ -336,14 +337,7 @@ html, body, [data-testid="stAppViewContainer"] {
 </style>
 """, unsafe_allow_html=True)
 
-@st.cache_resource
-def load_model():
-    model = tf.keras.models.load_model('models/yoga_model.keras')
-    classes = np.load('models/label_classes.npy', allow_pickle=True)
-    return model, classes
-
-model, classes = load_model()
-
+# Removed global load_model to avoid thread-safety issues
 mp_pose = mp.solutions.pose
 mp_draw = mp.solutions.drawing_utils
 mp_drawing_styles = mp.solutions.drawing_styles
@@ -485,6 +479,8 @@ class YogaProcessor:
         self.pose = mp_pose.Pose(min_detection_confidence=0.6, min_tracking_confidence=0.6)
         self.custom_style = mp_draw.DrawingSpec(color=(139, 108, 247), thickness=2, circle_radius=3)
         self.conn_style = mp_draw.DrawingSpec(color=(80, 60, 160), thickness=1)
+        self.model = tf.keras.models.load_model('models/yoga_model.keras')
+        self.classes = np.load('models/label_classes.npy', allow_pickle=True)
 
     def recv(self, frame: av.VideoFrame) -> av.VideoFrame:
         img = frame.to_ndarray(format="bgr24")
@@ -500,10 +496,10 @@ class YogaProcessor:
                                    mp_pose.POSE_CONNECTIONS,
                                    self.custom_style, self.conn_style)
             feats, angles = extract_features(result.pose_landmarks.landmark)
-            probs = model(feats[np.newaxis], training=False)[0].numpy()
+            probs = self.model(feats[np.newaxis], training=False)[0].numpy()
             conf_val = float(probs.max())
             if conf_val >= threshold:
-                pred = classes[probs.argmax()]
+                pred = self.classes[probs.argmax()]
                 label_text = pred
                 feedback = get_feedback(pred, angles)
 
