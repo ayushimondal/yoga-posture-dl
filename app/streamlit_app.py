@@ -476,13 +476,18 @@ if 'result_queue' not in st.session_state:
 # or inside a processor class. Let's use a processor class.
 class YogaProcessor:
     def __init__(self):
-        self.pose = mp_pose.Pose(min_detection_confidence=0.6, min_tracking_confidence=0.6)
-        self.custom_style = mp_draw.DrawingSpec(color=(139, 108, 247), thickness=2, circle_radius=3)
-        self.conn_style = mp_draw.DrawingSpec(color=(80, 60, 160), thickness=1)
-        self.model = tf.keras.models.load_model('models/yoga_model.keras')
-        self.classes = np.load('models/label_classes.npy', allow_pickle=True)
+        self.pose = None
+        self.model = None
+        self.classes = None
 
     def recv(self, frame: av.VideoFrame) -> av.VideoFrame:
+        if self.model is None:
+            self.pose = mp_pose.Pose(min_detection_confidence=0.6, min_tracking_confidence=0.6)
+            self.custom_style = mp_draw.DrawingSpec(color=(139, 108, 247), thickness=2, circle_radius=3)
+            self.conn_style = mp_draw.DrawingSpec(color=(80, 60, 160), thickness=1)
+            self.model = tf.keras.models.load_model('models/yoga_model.keras')
+            self.classes = np.load('models/label_classes.npy', allow_pickle=True)
+
         img = frame.to_ndarray(format="bgr24")
         img_rgb = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
         result = self.pose.process(img_rgb)
