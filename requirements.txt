@@ -4,3 +4,5 @@ mediapipe==0.10.13
 protobuf<5
 numpy<2
 tensorflow-cpu
+streamlit-webrtc
+av

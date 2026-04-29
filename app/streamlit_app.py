@@ -5,7 +5,9 @@ import numpy as np
 import tensorflow as tf
 import math
 import time
-
+import av
+import queue
+from streamlit_webrtc import webrtc_streamer, WebRtcMode, RTCConfiguration
 st.set_page_config(
     page_title="YogaVision",
     page_icon="🧘",
@@ -424,7 +426,6 @@ col_video, col_side = st.columns([3, 1.1])
 
 with col_side:
     st.markdown('<div class="section-label">Controls</div>', unsafe_allow_html=True)
-    run = st.checkbox("▶  Activate camera", value=False)
     threshold = st.slider("Min confidence", 0.0, 1.0, 0.4, 0.05, label_visibility="visible")
 
     st.markdown('<div class="section-label" style="margin-top:8px">Status</div>', unsafe_allow_html=True)
@@ -438,9 +439,6 @@ with col_side:
 
     st.markdown('<div class="section-label" style="margin-top:8px">Session</div>', unsafe_allow_html=True)
     stats_placeholder = st.empty()
-
-with col_video:
-    video_placeholder = st.empty()
 
 # ── Initial states ────────────────────────────────────────────────────────
 status_placeholder.markdown("""
@@ -474,69 +472,76 @@ stats_placeholder.markdown(f"""
     </div>
 </div>""", unsafe_allow_html=True)
 
-video_placeholder.markdown("""
-<div style="background:rgba(255,255,255,0.01);backdrop-filter:blur(20px);
-            border-radius:20px;border:1px solid rgba(255,255,255,0.08);
-            height:480px;display:flex;align-items:center;justify-content:center;
-            flex-direction:column;gap:16px;box-shadow:0 8px 32px rgba(0,0,0,0.4);">
-    <div style="font-size:56px;opacity:0.3;filter:drop-shadow(0 0 10px rgba(167,139,250,0.5));">🧘</div>
-    <div style="font-size:13px;letter-spacing:2px;text-transform:uppercase;
-                color:rgba(255,255,255,0.4);font-weight:600;font-family:'Inter', sans-serif;">Camera inactive</div>
-</div>""", unsafe_allow_html=True)
-
 # ── Main loop ─────────────────────────────────────────────────────────────
-if run:
+RTC_CONFIGURATION = RTCConfiguration({"iceServers": [{"urls": ["stun:stun.l.google.com:19302"]}]})
+
+if 'result_queue' not in st.session_state:
+    st.session_state.result_queue = queue.Queue()
+
+# We only want to instantiate the pose model once per thread, so we'll do it globally
+# or inside a processor class. Let's use a processor class.
+class YogaProcessor:
+    def __init__(self):
+        self.pose = mp_pose.Pose(min_detection_confidence=0.6, min_tracking_confidence=0.6)
+        self.custom_style = mp_draw.DrawingSpec(color=(139, 108, 247), thickness=2, circle_radius=3)
+        self.conn_style = mp_draw.DrawingSpec(color=(80, 60, 160), thickness=1)
+
+    def recv(self, frame: av.VideoFrame) -> av.VideoFrame:
+        img = frame.to_ndarray(format="bgr24")
+        img_rgb = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+        result = self.pose.process(img_rgb)
+
+        label_text = ""
+        conf_val = 0.0
+        feedback = []
+
+        if result.pose_landmarks:
+            mp_draw.draw_landmarks(img, result.pose_landmarks,
+                                   mp_pose.POSE_CONNECTIONS,
+                                   self.custom_style, self.conn_style)
+            feats, angles = extract_features(result.pose_landmarks.landmark)
+            probs = model.predict(feats[np.newaxis], verbose=0)[0]
+            conf_val = float(probs.max())
+            if conf_val >= threshold:
+                pred = classes[probs.argmax()]
+                label_text = pred
+                feedback = get_feedback(pred, angles)
+
+        if label_text:
+            overlay = img.copy()
+            cv2.rectangle(overlay, (0, 0), (img.shape[1], 56), (0,0,0), -1)
+            cv2.addWeighted(overlay, 0.5, img, 0.5, 0, img)
+            cv2.putText(img, label_text.title(), (16, 36),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.9, (200, 180, 255), 2)
+            cv2.putText(img, f"{conf_val*100:.1f}%", (img.shape[1]-80, 36),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.75, (139, 108, 247), 2)
+
+        st.session_state.result_queue.put((label_text, conf_val, feedback))
+        return av.VideoFrame.from_ndarray(img, format="bgr24")
+
+with col_video:
+    webrtc_ctx = webrtc_streamer(
+        key="yoga",
+        mode=WebRtcMode.SENDRECV,
+        rtc_configuration=RTC_CONFIGURATION,
+        video_processor_factory=YogaProcessor,
+        media_stream_constraints={"video": True, "audio": False},
+        async_processing=True,
+    )
+
+if webrtc_ctx.state.playing:
     status_placeholder.markdown("""
     <div class="status-pill active">
         <div class="status-dot pulse"></div> Live
     </div>""", unsafe_allow_html=True)
 
-    cap = cv2.VideoCapture(0)
-    custom_style = mp_draw.DrawingSpec(color=(139, 108, 247), thickness=2, circle_radius=3)
-    conn_style   = mp_draw.DrawingSpec(color=(80, 60, 160),  thickness=1)
-
-    with mp_pose.Pose(min_detection_confidence=0.6, min_tracking_confidence=0.6) as pose:
-        while run:
-            ret, frame = cap.read()
-            if not ret:
-                break
-
+    while webrtc_ctx.state.playing:
+        try:
+            label_text, conf_val, feedback = st.session_state.result_queue.get(timeout=0.1)
+            
             st.session_state.frames_processed += 1
-            img_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-            result  = pose.process(img_rgb)
-
-            label_text = ""
-            conf_val   = 0.0
-            feedback   = []
-
-            if result.pose_landmarks:
-                mp_draw.draw_landmarks(frame, result.pose_landmarks,
-                                       mp_pose.POSE_CONNECTIONS,
-                                       custom_style, conn_style)
-                feats, angles = extract_features(result.pose_landmarks.landmark)
-                probs = model.predict(feats[np.newaxis], verbose=0)[0]
-                conf_val = float(probs.max())
-                if conf_val >= threshold:
-                    pred = classes[probs.argmax()]
-                    label_text = pred
-                    feedback = get_feedback(pred, angles)
-                    st.session_state.detections += 1
-
-            # Overlay on frame
             if label_text:
-                overlay = frame.copy()
-                cv2.rectangle(overlay, (0, 0), (frame.shape[1], 56), (0,0,0), -1)
-                cv2.addWeighted(overlay, 0.5, frame, 0.5, 0, frame)
-                cv2.putText(frame, label_text.title(), (16, 36),
-                            cv2.FONT_HERSHEY_SIMPLEX, 0.9, (200, 180, 255), 2)
-                cv2.putText(frame, f"{conf_val*100:.1f}%", (frame.shape[1]-80, 36),
-                            cv2.FONT_HERSHEY_SIMPLEX, 0.75, (139, 108, 247), 2)
-
-            video_placeholder.image(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB),
-                                    channels="RGB", use_container_width=True)
-
-            # Pose card
-            if label_text:
+                st.session_state.detections += 1
                 bar_w = int(conf_val * 100)
                 pose_placeholder.markdown(f"""
                 <div class="pose-card">
@@ -554,7 +559,6 @@ if run:
                     <div class="pose-name idle">No pose detected…</div>
                 </div>""", unsafe_allow_html=True)
 
-            # Feedback
             if feedback:
                 items = "".join([f'<div class="feedback-item"><span class="feedback-icon">⚠</span>{f}</div>' for f in feedback])
                 feedback_placeholder.markdown(f'<div class="feedback-block">{items}</div>', unsafe_allow_html=True)
@@ -564,7 +568,6 @@ if run:
                     <div class="feedback-good">✓ Form looks good</div>
                 </div>""", unsafe_allow_html=True)
 
-            # Stats
             stats_placeholder.markdown(f"""
             <div class="stats-row">
                 <div class="stat-box">
@@ -576,8 +579,10 @@ if run:
                     <div class="stat-box-label">Detections</div>
                 </div>
             </div>""", unsafe_allow_html=True)
-
-    cap.release()
+            
+        except queue.Empty:
+            continue
+else:
     status_placeholder.markdown("""
     <div class="status-pill idle">
         <div class="status-dot"></div> Camera off
