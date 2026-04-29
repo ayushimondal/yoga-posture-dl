@@ -337,7 +337,8 @@ html, body, [data-testid="stAppViewContainer"] {
 </style>
 """, unsafe_allow_html=True)
 
-# Removed global load_model to avoid thread-safety issues
+# Removed global model loading to avoid thread-safety issues, but classes can be loaded safely
+classes = np.load('models/label_classes.npy', allow_pickle=True)
 mp_pose = mp.solutions.pose
 mp_draw = mp.solutions.drawing_utils
 mp_drawing_styles = mp.solutions.drawing_styles
