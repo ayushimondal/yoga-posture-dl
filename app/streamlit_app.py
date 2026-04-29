@@ -500,7 +500,7 @@ class YogaProcessor:
                                    mp_pose.POSE_CONNECTIONS,
                                    self.custom_style, self.conn_style)
             feats, angles = extract_features(result.pose_landmarks.landmark)
-            probs = model.predict(feats[np.newaxis], verbose=0)[0]
+            probs = model(feats[np.newaxis], training=False)[0].numpy()
             conf_val = float(probs.max())
             if conf_val >= threshold:
                 pred = classes[probs.argmax()]
