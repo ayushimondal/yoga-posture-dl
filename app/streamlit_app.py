@@ -1,12 +1,12 @@
+import tensorflow as tf
 import streamlit as st
-import av
 import cv2
 import mediapipe as mp
 import numpy as np
-import tensorflow as tf
 import math
 import time
 import queue
+import av
 from streamlit_webrtc import webrtc_streamer, WebRtcMode, RTCConfiguration
 
 st.set_page_config(
