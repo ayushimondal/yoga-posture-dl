@@ -2,5 +2,5 @@ streamlit
 opencv-python-headless
 mediapipe<=0.10.30
 protobuf<5
-numpy
+numpy<2
 tensorflow-cpu
